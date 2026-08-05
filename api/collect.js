@@ -389,6 +389,14 @@ function getTag(xml, tag) {
   return match ? decodeXml(match[1]).trim() : "";
 }
 
+// Google News RSS의 <link>는 news.google.com 리다이렉트 링크라 실제 발행처
+// 도메인이 아닙니다. <source url="..."> 속성이 실제 발행처 홈페이지이므로
+// 출처 등급 판정에는 이 값을 사용합니다.
+function getSourceHomepage(xml) {
+  const match = String(xml).match(/<source[^>]*\burl="([^"]*)"[^>]*>/i);
+  return match ? match[1] : "";
+}
+
 const LOCALE_BY_LANG = {
   ko: { hl: "ko", gl: "KR", ceid: "KR:ko" },
   en: { hl: "en-US", gl: "US", ceid: "US:en" }
@@ -415,6 +423,7 @@ function parseItems(xml, feed) {
     let title = stripHtml(getTag(item, "title"));
     const source = stripHtml(getTag(item, "source")) || "Google News";
     const url = stripHtml(getTag(item, "link"));
+    const sourceHomepage = getSourceHomepage(item) || url;
     const description = stripHtml(getTag(item, "description"));
     const publishedValue = stripHtml(getTag(item, "pubDate"));
     const publishedDate = new Date(publishedValue);
@@ -431,6 +440,8 @@ function parseItems(xml, feed) {
       summary = summary.slice(title.length).trim();
     }
 
+    const { source_tier, source_type } = classifySource(sourceHomepage);
+
     return {
       title: title.slice(0, 500),
       url: url.slice(0, 2000),
@@ -442,7 +453,9 @@ function parseItems(xml, feed) {
       image_url: null,
       published_at: Number.isNaN(publishedDate.getTime())
         ? null
-        : publishedDate.toISOString()
+        : publishedDate.toISOString(),
+      source_tier,
+      source_type
     };
   }).filter(article => article.title && article.url);
 }
@@ -499,6 +512,8 @@ function parseForumThreads(html) {
       ? href
       : `https://www.microstockgroup.com/${href.replace(/^\.?\//, "")}`;
 
+    const { source_tier, source_type } = classifySource(url);
+
     // 공식 인기순 데이터가 없어 "포럼 최신글"로만 표시합니다.
     threads.push({
       title: title.slice(0, 500),
@@ -509,7 +524,9 @@ function parseForumThreads(html) {
       priority: 4,
       keywords: ["microstockgroup forum"],
       image_url: null,
-      published_at: null
+      published_at: null,
+      source_tier,
+      source_type
     });
 
     if (threads.length >= 15) {
@@ -612,12 +629,8 @@ module.exports = async (req, res) => {
       return false;
     });
 
-    // 회사명/출처 등급을 매깁니다.
-    relevant.forEach(article => {
-      const { source_tier, source_type } = classifySource(article.url);
-      article.source_tier = source_tier;
-      article.source_type = source_type;
-    });
+    // 출처 등급(source_tier/source_type)은 parseItems/parseForumThreads에서
+    // 실제 발행처 홈페이지 기준으로 이미 매겨져 있습니다.
 
     // URL 기준 중복 제거
     const uniqueByUrl = new Map();
