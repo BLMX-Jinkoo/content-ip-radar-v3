@@ -31,8 +31,10 @@ module.exports = async (req, res) => {
   const to = from + limit - 1;
 
   try {
+    // 공개 API는 review_status='approved' 기사만 반환한다.
+    // (pending/rejected는 DB에 보존되지만 사이트·AI 브리핑에 노출하지 않는다.)
     const response = await fetch(
-      `${supabaseUrl}/rest/v1/articles?select=*&order=collected_at.desc`,
+      `${supabaseUrl}/rest/v1/articles?select=*&review_status=eq.approved&order=collected_at.desc`,
       {
         headers: {
           apikey: supabaseKey,

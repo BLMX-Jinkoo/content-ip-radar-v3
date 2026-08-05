@@ -3,13 +3,16 @@
   "trailingSlash": false,
   "crons": [
     {
-      "path": "/api/collect",
+      "path": "/api/collect-v2",
       "schedule": "10 0 * * *"
     }
   ],
   "functions": {
     "api/collect.js": {
       "maxDuration": 45
+    },
+    "api/collect-v2.js": {
+      "maxDuration": 60
     }
   }
 }
