@@ -733,6 +733,107 @@
       community: "커뮤니티"
     };
 
+    // 이 사이트는 한국어 기준입니다. 영문 등 한글이 아닌 기사 제목·요약은
+    // /api/translate(Google 번역)로 한국어로 옮겨서 표시합니다.
+    const translationCache = new Map();
+
+    function collapseText(value) {
+      return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 400);
+    }
+
+    function hasHangul(value) {
+      return /[가-힣]/.test(String(value ?? ""));
+    }
+
+    // 한글이 전혀 없고 라틴 문자가 있으면 번역 대상으로 봅니다.
+    function needsTranslation(value) {
+      const text = collapseText(value);
+      return Boolean(text) && !hasHangul(text) && /[A-Za-z]/.test(text);
+    }
+
+    async function callTranslate(texts) {
+      const response = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ texts, tl: "ko" }),
+        signal: AbortSignal.timeout(20000)
+      });
+
+      if (!response.ok) {
+        throw new Error("번역 요청 실패");
+      }
+
+      const data = await response.json();
+      return Array.isArray(data.texts) ? data.texts : texts;
+    }
+
+    // 로드된 기사 중 한글이 아닌 제목·요약을 모아 한국어로 번역하고,
+    // 원문은 originalTitle/originalSummary에 보관합니다. (이미 처리한 기사는 건너뜀)
+    async function translateArticles(list) {
+      const keys = new Set();
+
+      list.forEach(article => {
+        if (article.translated) return;
+
+        if (needsTranslation(article.title)) {
+          const key = collapseText(article.title);
+          if (!translationCache.has(key)) keys.add(key);
+        }
+
+        if (needsTranslation(article.summary)) {
+          const key = collapseText(article.summary);
+          if (!translationCache.has(key)) keys.add(key);
+        }
+      });
+
+      const pending = [...keys];
+
+      // /api/translate는 한 번에 최대 80개까지 처리하므로 50개씩 나눠 보냅니다.
+      for (let i = 0; i < pending.length; i += 50) {
+        const chunk = pending.slice(i, i + 50);
+
+        try {
+          const translated = await callTranslate(chunk);
+          chunk.forEach((original, index) => {
+            translationCache.set(original, translated[index] || original);
+          });
+        } catch (error) {
+          // 실패한 묶음은 원문 그대로 두고 다음 묶음을 계속 시도합니다.
+          chunk.forEach(original => translationCache.set(original, original));
+        }
+      }
+
+      list.forEach(article => {
+        if (article.translated) return;
+
+        let changed = false;
+
+        if (needsTranslation(article.title)) {
+          const key = collapseText(article.title);
+          const value = translationCache.get(key);
+          if (value && value !== article.title) {
+            article.originalTitle = article.title;
+            article.title = value;
+            changed = true;
+          }
+        }
+
+        if (needsTranslation(article.summary)) {
+          const key = collapseText(article.summary);
+          const value = translationCache.get(key);
+          if (value && value !== article.summary) {
+            article.originalSummary = article.summary;
+            article.summary = value;
+            changed = true;
+          }
+        }
+
+        if (changed) article.translated = true;
+      });
+
+      render();
+    }
+
     function escapeHtml(value) {
       return String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -1059,6 +1160,9 @@
         $("status-note").textContent =
           `저장 기사 ${articles.length}개를 불러왔습니다.`;
 
+        // 영문 기사를 한국어로 번역해 다시 그립니다. (네트워크 작업이라 비동기)
+        translateArticles(articles);
+
       } catch (error) {
         articles = [];
 
@@ -1117,6 +1221,9 @@
 
         updateNavigation();
         updateStats();
+
+        // 새로 불러온 기사 중 영문 기사를 번역합니다.
+        translateArticles(articles);
 
       } catch (error) {
         $("status-note").textContent = "추가 기사를 불러오지 못했습니다.";
