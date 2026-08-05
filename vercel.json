@@ -6,5 +6,10 @@
       "path": "/api/collect",
       "schedule": "10 0 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "api/collect.js": {
+      "maxDuration": 30
+    }
+  }
 }
