@@ -17,13 +17,28 @@ module.exports = async (req, res) => {
     });
   }
 
+  const requestedLimit = Number.parseInt(req.query?.limit, 10);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(Math.max(requestedLimit, 1), 100)
+    : 50;
+
+  const requestedPage = Number.parseInt(req.query?.page, 10);
+  const page = Number.isFinite(requestedPage) && requestedPage > 0
+    ? requestedPage
+    : 1;
+
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
   try {
     const response = await fetch(
-      `${supabaseUrl}/rest/v1/articles?select=*&order=collected_at.desc&limit=100`,
+      `${supabaseUrl}/rest/v1/articles?select=*&order=collected_at.desc`,
       {
         headers: {
           apikey: supabaseKey,
           Authorization: `Bearer ${supabaseKey}`,
+          Range: `${from}-${to}`,
+          Prefer: "count=exact",
         },
       }
     );
@@ -37,9 +52,17 @@ module.exports = async (req, res) => {
       });
     }
 
+    const contentRange = response.headers.get("content-range") || "";
+    const parsedTotal = Number(contentRange.split("/")[1]);
+    const total = Number.isFinite(parsedTotal) ? parsedTotal : data.length;
+
     return res.status(200).json({
       success: true,
       count: data.length,
+      total,
+      page,
+      limit,
+      hasMore: from + data.length < total,
       articles: data,
     });
   } catch (error) {

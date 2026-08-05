@@ -20,6 +20,7 @@
       --gold: #b9822e;
       --ok: #2f7d4f;
       --err: #b3261e;
+      --info: #2f5d8a;
       --serif: Georgia, "Times New Roman", serif;
       --sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
               "Malgun Gothic", "Segoe UI", sans-serif;
@@ -395,6 +396,26 @@
       color: var(--gold);
     }
 
+    .badge.badge-official {
+      border-color: var(--ok);
+      color: var(--ok);
+    }
+
+    .badge.badge-news {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .badge.badge-industry {
+      border-color: var(--gold);
+      color: var(--gold);
+    }
+
+    .badge.badge-community {
+      border-color: var(--info);
+      color: var(--info);
+    }
+
     .card h2 {
       font-family: var(--serif);
       font-size: 17px;
@@ -650,7 +671,8 @@
       </select>
 
       <select id="sort" aria-label="정렬 선택">
-        <option value="latest">최신순</option>
+        <option value="recommended">추천순</option>
+        <option value="latest" selected>최신순</option>
         <option value="oldest">오래된 순</option>
       </select>
     </section>
@@ -699,6 +721,17 @@
     let selectedCategory = "전체";
     let visibleLimit = 24;
     let loading = false;
+    let currentPage = 1;
+    let hasMorePages = false;
+    const PAGE_SIZE = 100;
+    const TIER_RANK = { A: 3, B: 2, C: 1 };
+
+    const SOURCE_TYPE_LABEL = {
+      official: "공식 발표",
+      news: "신뢰 매체",
+      industry: "전문매체",
+      community: "커뮤니티"
+    };
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -764,6 +797,10 @@
         category: String(article.category || "미분류").trim(),
         imageUrl: String(article.image_url || article.imageUrl || "").trim(),
         keywords: Array.isArray(article.keywords) ? article.keywords : [],
+        priority: Number.isFinite(article.priority) ? article.priority : 99,
+        sourceTier: article.source_tier || null,
+        sourceType: article.source_type || null,
+        trendScore: Number.isFinite(article.trend_score) ? article.trend_score : 0,
         date: parseDate(
           article.published_at ||
           article.collected_at ||
@@ -852,6 +889,17 @@
       });
 
       result.sort((a, b) => {
+        if (sort === "recommended") {
+          if (a.priority !== b.priority) return a.priority - b.priority;
+
+          const tierDiff = (TIER_RANK[b.sourceTier] || 0) - (TIER_RANK[a.sourceTier] || 0);
+          if (tierDiff !== 0) return tierDiff;
+
+          if (b.trendScore !== a.trendScore) return b.trendScore - a.trendScore;
+
+          return (b.date?.getTime() || 0) - (a.date?.getTime() || 0);
+        }
+
         const aTime = a.date?.getTime() || 0;
         const bTime = b.date?.getTime() || 0;
 
@@ -876,6 +924,9 @@
       card.innerHTML = `
         <div class="badges">
           <span class="badge">${category}</span>
+          ${article.sourceType && SOURCE_TYPE_LABEL[article.sourceType]
+            ? `<span class="badge badge-${article.sourceType}">${SOURCE_TYPE_LABEL[article.sourceType]}</span>`
+            : ''}
           ${isFresh(article)
             ? '<span class="badge fresh">신규</span>'
             : ''}
@@ -951,10 +1002,11 @@
         grid.appendChild(createCard(article));
       });
 
-      if (result.length > visibleLimit) {
+      if (result.length > visibleLimit || hasMorePages) {
         $("more").style.display = "block";
-        $("more").textContent =
-          `기사 더 보기 (${result.length - visibleLimit}개 남음) ↓`;
+        $("more").textContent = result.length > visibleLimit
+          ? `기사 더 보기 (${result.length - visibleLimit}개 남음) ↓`
+          : "기사 더 보기 ↓";
       } else {
         $("more").style.display = "none";
       }
@@ -971,7 +1023,7 @@
       showSkeleton();
 
       try {
-        const response = await fetch("/api/articles", {
+        const response = await fetch(`/api/articles?page=1&limit=${PAGE_SIZE}`, {
           cache: "no-store",
           signal: AbortSignal.timeout(15000)
         });
@@ -984,11 +1036,10 @@
 
         articles = (data.articles || [])
           .map(normalizeArticle)
-          .filter(article => article.title && article.url)
-          .sort((a, b) =>
-            (b.date?.getTime() || 0) -
-            (a.date?.getTime() || 0)
-          );
+          .filter(article => article.title && article.url);
+
+        currentPage = 1;
+        hasMorePages = Boolean(data.hasMore);
 
         selectedCategory = "전체";
         visibleLimit = 24;
@@ -1027,6 +1078,52 @@
       } finally {
         loading = false;
         $("refresh").disabled = false;
+        render();
+      }
+    }
+
+    async function loadMoreFromServer() {
+      if (loading || !hasMorePages) return;
+
+      loading = true;
+      $("more").disabled = true;
+
+      try {
+        const nextPage = currentPage + 1;
+        const response = await fetch(`/api/articles?page=${nextPage}&limit=${PAGE_SIZE}`, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(15000)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error("추가 기사 조회에 실패했습니다.");
+        }
+
+        const existingUrls = new Set(articles.map(article => article.url));
+
+        const fresh = (data.articles || [])
+          .map(normalizeArticle)
+          .filter(article =>
+            article.title &&
+            article.url &&
+            !existingUrls.has(article.url)
+          );
+
+        articles = [...articles, ...fresh];
+        currentPage = nextPage;
+        hasMorePages = Boolean(data.hasMore);
+
+        updateNavigation();
+        updateStats();
+
+      } catch (error) {
+        $("status-note").textContent = "추가 기사를 불러오지 못했습니다.";
+
+      } finally {
+        loading = false;
+        $("more").disabled = false;
         render();
       }
     }
@@ -1193,8 +1290,18 @@
     });
 
     $("more").addEventListener("click", () => {
-      visibleLimit += 24;
-      render();
+      const result = filteredArticles();
+
+      if (visibleLimit < result.length) {
+        visibleLimit += 24;
+        render();
+        return;
+      }
+
+      if (hasMorePages) {
+        visibleLimit += 24;
+        loadMoreFromServer();
+      }
     });
 
     $("brief-week").addEventListener("click", () => {
