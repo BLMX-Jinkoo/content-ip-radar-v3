@@ -18,6 +18,8 @@
       --accent: #8e2f2a;
       --accent-deep: #6f221f;
       --gold: #b9822e;
+      --ok: #2f7d4f;
+      --err: #b3261e;
       --serif: Georgia, "Times New Roman", serif;
       --sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
               "Malgun Gothic", "Segoe UI", sans-serif;
@@ -168,6 +170,62 @@
     button:disabled {
       opacity: .5;
       cursor: wait;
+    }
+
+    .status-panel {
+      margin-top: 16px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      background: var(--card);
+    }
+
+    .status-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .status-badge {
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--line);
+      color: var(--soft);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .status-badge.ok {
+      background: rgba(47, 125, 79, .12);
+      color: var(--ok);
+    }
+
+    .status-badge.err {
+      background: rgba(179, 38, 30, .12);
+      color: var(--err);
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+    }
+
+    .status-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .status-label {
+      color: var(--soft);
+      font-size: 11.5px;
+    }
+
+    .status-value {
+      font-weight: 800;
+      font-size: 15px;
     }
 
     .stats {
@@ -457,6 +515,10 @@
       .stat:nth-child(-n+2) {
         border-bottom: 1px solid var(--line);
       }
+
+      .status-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
     }
 
     @media (max-width: 620px) {
@@ -482,6 +544,10 @@
         align-items: flex-start;
         flex-direction: column;
       }
+
+      .status-grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -506,6 +572,40 @@
   </nav>
 
   <main class="wrap">
+    <section class="status-panel" id="status-panel">
+      <div class="status-head">
+        <div class="section-title">시스템 상태</div>
+        <span class="status-badge" id="status-badge">확인 중…</span>
+      </div>
+
+      <div class="status-grid">
+        <div class="status-item">
+          <span class="status-label">Supabase 연결</span>
+          <span class="status-value" id="status-supabase">확인 중…</span>
+        </div>
+
+        <div class="status-item">
+          <span class="status-label">저장된 기사 수</span>
+          <span class="status-value" id="status-total">—</span>
+        </div>
+
+        <div class="status-item">
+          <span class="status-label">최근 수집 시간</span>
+          <span class="status-value" id="status-last-collected">—</span>
+        </div>
+
+        <div class="status-item">
+          <span class="status-label">자동수집</span>
+          <span class="status-value">매일 오전 9시대 실행</span>
+        </div>
+
+        <div class="status-item">
+          <span class="status-label">마지막 상태 확인</span>
+          <span class="status-value" id="status-checked">—</span>
+        </div>
+      </div>
+    </section>
+
     <div class="meta-line">
       <span>업데이트 <span id="updated">—</span></span>
       <button class="refresh" id="refresh">↻ 새로고침</button>
@@ -931,6 +1031,61 @@
       }
     }
 
+    async function loadStatus() {
+      const badge = $("status-badge");
+      badge.textContent = "확인 중…";
+      badge.className = "status-badge";
+
+      try {
+        const response = await fetch("/api/status", {
+          cache: "no-store",
+          signal: AbortSignal.timeout(8000)
+        });
+
+        const data = await response.json();
+        const ok = Boolean(data.success && data.supabaseConnected);
+
+        badge.textContent = ok ? "정상" : "오류";
+        badge.classList.add(ok ? "ok" : "err");
+
+        $("status-supabase").textContent = ok ? "정상" : "오류";
+
+        $("status-total").textContent =
+          typeof data.totalArticles === "number" ? data.totalArticles : "—";
+
+        $("status-last-collected").textContent = data.lastCollectedAt
+          ? relativeTime(parseDate(data.lastCollectedAt))
+          : "기록 없음";
+
+        $("status-checked").textContent = data.checkedAt
+          ? new Date(data.checkedAt).toLocaleString("ko-KR", {
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit"
+            })
+          : "—";
+
+      } catch (error) {
+        badge.textContent = "오류";
+        badge.classList.add("err");
+
+        $("status-supabase").textContent = "오류";
+        $("status-total").textContent = "—";
+        $("status-last-collected").textContent = "—";
+
+        $("status-checked").textContent =
+          new Date().toLocaleString("ko-KR", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit"
+          });
+      }
+    }
+
     function briefingItems(days) {
       const cutoff = Date.now() - days * 86400000;
 
@@ -1017,7 +1172,10 @@
       }
     }
 
-    $("refresh").addEventListener("click", loadArticles);
+    $("refresh").addEventListener("click", () => {
+      loadArticles();
+      loadStatus();
+    });
 
     $("search").addEventListener("input", () => {
       visibleLimit = 24;
@@ -1071,6 +1229,12 @@
     });
 
     loadArticles();
+    loadStatus();
+
+    setInterval(() => {
+      loadArticles();
+      loadStatus();
+    }, 5 * 60 * 1000);
   </script>
 </body>
 </html>
